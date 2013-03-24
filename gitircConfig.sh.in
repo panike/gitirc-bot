@@ -1,0 +1,20 @@
+#!/bin/bash
+get_build_string() {
+	local GIT=git
+	if test ! -z "$1"; then
+		GIT="$GIT --git-dir=$1/.git"
+	fi
+	if test -d "$1/.git"; then
+		suffix=$($GIT diff --quiet && $GIT diff --cached --quiet || echo -n "-dirty")
+		result="$($GIT rev-parse --short HEAD)$suffix Compiled $(date)"
+		echo -n "$result"
+	else
+		echo -n "unknown version Compiled $(date)"
+	fi
+}
+
+cat > $1 <<HEADER_FILE
+#define gitirc_VERSION_MAJOR @gitirc_VERSION_MAJOR@
+#define gitirc_VERSION_MINOR @gitirc_VERSION_MINOR@
+#define gitirc_BUILD_STRING "$(get_build_string "$2")"
+HEADER_FILE
