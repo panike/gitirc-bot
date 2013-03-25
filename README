@@ -1,0 +1,48 @@
+This is the source code for gitirc-bot.
+
+It depends on libircclient.  You can download libircclient from
+http://www.ulduzsoft.com/linux/libircclient/
+
+To install libircclient as useful for gitirc-bot, you will
+
+cd /path/to/gitirc-bot/repo
+tar xzf /path/to/libircclient-x.y.tgz
+ln -s libircclient-x.y libircclient
+cd libircclient; configure; make
+
+To build gitirc-bot, you need cweb from
+http://www-cs-faculty.stanford.edu/~uno/cweb.html and cmake, and a working c++
+compiler.  g++ version 4.4 seems to be required now.
+
+Then run cmake . && make
+
+Finally you will need configuration files.  Here is mine, for gitirc.
+
+build_prefix	http://submit-2.batlab.org/results/run-details.php?sha1=
+change	change
+channel	#distcomp
+corruption_email	corruption-mail
+gitpath	/scratch/nwp/git-testing/bin/git
+gitrepo	/scratch/nwp/condor-src-for-condorbot
+http_port	4000
+listen_build_port	3026
+listen_port	3025
+log	log
+nick	htcondorbot
+port	6667
+realname	Nathan W. Panike
+rss-reader-path	rss-reader
+server	chat.freenode.net
+shorten	shorten
+ticket_prefix	https://htcondor-wiki.cs.wisc.edu/index.cgi/tktview?tn=
+username	nwp
+rss-config	rss-config
+
+Here is the rss-config file:
+
+verbosity	1
+wgetpath	/usr/bin/wget
+wgeturl	https://username:password@condor-wiki.cs.wisc.edu/index.cgi/timeline.rss?d=1&px=
+rss_time	1364201348
+
+Notice that names and values are separated by a tab character
