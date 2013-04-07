@@ -175,8 +175,10 @@ StringSplitter::StringSplitter(const std::string& s, unsigned int length) :
 std::string StringSplitter::get()
 {
 	std::string ret;
-	if(source.size() <= len) ret = std::move(source);
-	else @<The string needs to be split into smaller pieces@>@;
+	if(source.size() <= len) {
+		ret = std::move(source);
+		source.clear();
+	}@+else @<The string needs to be split into smaller pieces@>@;
 	return ret;
 }
 @ @<The string needs to be split into smaller pieces@>={
@@ -240,7 +242,7 @@ void trim_boundary_space(std::string& message)
 		std::not1(spaceFinder()));
 	message.erase(mri.base(),message.end());
 	auto mit = std::find_if(message.begin(),message.end(),
-		spaceFinder());
+		std::not1(spaceFinder()));
 	message.erase(message.begin(),mit);
 }}
 @ @<Split the message into parts of around 380 chars@>={
@@ -274,7 +276,7 @@ struct rlimit rlim;
 getrlimit(RLIMIT_NOFILE,&rlim);
 ioctl(0,TIOCNOTTY);
 for(unsigned int i=0;i<rlim.rlim_cur;++i)
-	close(i);
+	::close(i);
 open("/dev/null",O_RDONLY);
 open("/dev/null",O_WRONLY);
 open("/dev/null",O_WRONLY);
@@ -297,6 +299,21 @@ const int normal_log_line_length = 72;
 @<Check the configuration@>@;
 if(!configuration["directory"].empty())
 	chdir(configuration["directory"].c_str());
+get_outputs(configuration);
+@ @<Function declarations for |main|@>=
+void get_outputs(std::map<std::string,std::string>& c)
+{
+	auto ci = c.find("error");
+	if(ci != c.end()) {
+		::close(2);
+		::open(ci->second.c_str(),O_CREAT|O_APPEND|O_WRONLY,S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH);
+	}
+	ci = c.find("output");
+	if(ci != c.end()) {
+		::close(1);
+		::open(ci->second.c_str(),O_CREAT|O_APPEND|O_WRONLY,S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH);
+	}
+}
 @ @<Get the configuration file@>=
 char* configfilename = 0;
 for(int i=1;i<argc;++i)
@@ -382,6 +399,10 @@ if(!tmessages.empty()) {
 		_exit(1);
 	}	
 }
+#if 0
+for(auto tmsg = tmessages.begin(); tmsg != tmessages.end(); ++tmsg)
+	userlog << "Message is \"" << tmsg->msg << "\"" << std::endl;
+#endif
 messages.insert(messages.begin(),tmessages.begin(),tmessages.end());
 @ We rotate the log after 16 megabytes has been used.
 @<Wait for something to happen@>=
@@ -471,10 +492,8 @@ if(FD_ISSET(listenfd,&rfds)){
 		::close(afd);
 		time_t now;
 		::time(&now);
-		if(messages.empty() && now > last_build_check_time + 3600) {
-			@<Read the build branches@>@;
+		if(messages.empty() && now > last_build_check_time + 3600)
 			last_build_check_time = now;
-		}
 		break;
 	}
 }
@@ -502,39 +521,13 @@ tva.tv_sec = 0;
 tva.tv_usec = 0;
 if(::select(acceptfd+1,&afds,0,0,&tva) == 0) break;
 @ @<Initialize the program@>=
-std::set<std::string> build_branches;
-std::ifstream bbranches;
 git_db the_repo(configuration);
 time_t last_build_check_time;
 ::time(&last_build_check_time);
-@<Read the build branches@>@;
 the_repo.fetch();
 @ @<Initialize the program@>=
 @<Initialize libircclient@>@;
 @<Set up the listening socket@>@;
-@ @<Read the build branches@>=
-@^Hack for condor@>
-bbranches.open(configuration["build_branches_file"].c_str());
-if(bbranches) {
-	std::string branch;
-	while(std::getline(bbranches,branch)){
-		if(branch.empty())
-			continue;
-		auto r = std::find(branch.begin(),branch.end(),'#');
-		branch.erase(r,branch.end());
-		if(branch.empty())
-			continue;
-		r = std::remove_if(branch.begin(),branch.end(),spaceFinder());
-		branch.erase(r,branch.end());
-		if(!branch.empty()) build_branches.insert(branch);
-	}
-	bbranches.close();
-#if 0
-	for(auto& sit : build_branches)
-		userlog << "Watching for branch " << sit << std::endl;
-#endif
-	the_repo.set_builds(build_branches);
-}
 @ @<Constants for expressiveness and templating@>=
 const int log_rotation_limit = (1<<24);
 const int sleep_for_one_hour = 3600;
@@ -775,7 +768,6 @@ check_config("port",configuration,"Need a port");
 check_config("nick",configuration,"Need a nick");
 check_config("username",configuration,"Need a username");
 check_config("realname",configuration,"Need a realname");
-check_config("build_branches_file",configuration,"Need list of build branches");
 @ @<Connect to irc server@>=
 irc_session_t* ist = irc_create_session(&irc);
 if(!ist){
@@ -903,8 +895,11 @@ std::vector<const char*> rssv;
 for(const char** rpp = &rss_reader_argv[0]; *rpp; ++rpp)
 	rssv.push_back(*rpp);
 Process process(configuration["rss-reader-path"].c_str(),rssv);
-for(std::string message = process.next(); !message.empty(); message = process.next())
-	messages.push_front(irc_id(message));
+for(;;) {
+	if(process.finished()) break;
+	auto message = process.next();
+	if(!message.empty()) messages.push_front(irc_id(message));
+}
 @ @<Header inclusions for |main|@>=
 #include <string>
 #include <cstring>
@@ -1004,17 +999,64 @@ if(has_httpd && ((httpfd >= 0 && FD_ISSET(httpfd,&rfds)) ||
 		FD_ISSET(http_socket,&rfds))){
 	if(httpfd < 0 && FD_ISSET(http_socket,&rfds)) {
 // Probably should check IP address of client here
-		httpfd = ::accept(http_socket,0,0);
+		struct sockaddr_in remote;
+		socklen_t remote_len = sizeof(remote);
+		httpfd = ::accept(http_socket,(struct sockaddr*)&remote,&remote_len);
+		userlog << "Accepting connection from " << inet_ntoa(remote.sin_addr) << std::endl;
 		http_message.clear();
 		http_msg_complete = false;
 	}
 	if(httpfd>=0 && FD_ISSET(httpfd,&rfds)){
 		int numread;
 		if((numread = ::read(httpfd,httpbuf.get(),1<<18)) <= 0) {
+			userlog << "Received " << numread << " bytes from remote host on http port" << std::endl;
 			::close(httpfd);
 			httpfd = gitirc_constants::invalid_fd;
 			http_msg_complete = (numread == 0);
-		}@+else if(numread > 0) http_message.append(httpbuf.get(),numread);
+		}@+else if(numread > 0) { 
+			userlog << "Received " << numread << " bytes from remote host on http port" << std::endl;
+			http_message.append(httpbuf.get(),numread);
+			@<Find the content length header@>@;
+			@<If we have it all, return a reply, close the connection@>@;
+		}
+	}
+}
+@ @<Find the content length header@>=
+http_message.erase(std::remove(http_message.begin(),http_message.end(),'\r'),http_message.end());
+auto cloff = http_message.find("Content-Length:");
+if(cloff == std::string::npos)
+	cloff = http_message.find("content-length:");
+unsigned int content_length = 0;
+if(cloff != std::string::npos) {
+	auto cli = std::find(http_message.begin() + cloff,http_message.end(),':');
+	if(cli != http_message.end()) ++cli;
+	if(cli != http_message.end()) ++cli;
+	for(;cli != http_message.end() && *cli != '\r' && *cli != '\n';++cli) {
+		if(std::isdigit(*cli)) {
+			content_length *= 10;
+			content_length += *cli - '0';
+		}
+	}
+}
+@ @<If we have it all, return a reply, close the connection@>=
+cloff = http_message.find("\n\n");
+if(cloff != std::string::npos) {
+	cloff += 2;
+	if(http_message.size() >= cloff+content_length) {
+		http_msg_complete = true;
+		auto prot = http_message.begin();
+		for(auto ii = 0;ii<2; ++ii) {
+			prot = std::find(prot,http_message.end(),' ');
+			++prot;
+		}
+		std::stringstream ss;
+		ss << std::string(prot,std::find(prot,http_message.end(),'\n'))
+			<< " 200 OK\r\nConnection: close\r\n\r\n";
+		userlog << "Sending reply " << ss.str() << std::endl;
+		::write(httpfd,ss.str().data(),ss.str().size());
+		::close(httpfd);
+		::shutdown(httpfd,SHUT_RDWR);
+		httpfd = gitirc_constants::invalid_fd;
 	}
 }
 @ @<Check |http_socket| for messages@>=
@@ -1095,7 +1137,8 @@ else @<Get the JSON event from the body@>@;
 @<Get the JSON event from the body@>={
 	@<Get the event that we have received@>@;
 	auto pp = http_message.begin() + offset + 2;
-	if(http_message.find("Content-Type: application/json") == std::string::npos)
+	if(http_message.find("Content-Type: application/json") == std::string::npos
+			&& http_message.find("content-type: application/json") == std::string::npos)
 		@<Not JSON, so we believe it is urlencoded@>@;
 	else {
 		userlog << "Looks like it is JSON" << std::endl;
@@ -1110,10 +1153,17 @@ else @<Get the JSON event from the body@>@;
 }
 @ @<Get the event that we have received@>=
 size_t event_offset = http_message.find("X-Github-Event:");
+if(event_offset == std::string::npos)
+	event_offset = http_message.find("X-GitHub-Event:");
 if(event_offset != std::string::npos) {
 	auto eob = http_message.begin() + event_offset;
 	eob = std::find(eob,http_message.end(),':')+2;
 	github_event.assign(eob,std::find(eob,http_message.end(),'\n'));
+}@+else {
+	userlog << "Did not find Github-Event header!" << std::endl;
+	http_msg_complete = false;
+	http_message.clear();
+	goto done_processing_http;
 }
 @ We need to decode the body into JSON.
 @<Not JSON, so we believe it is urlencoded@>={

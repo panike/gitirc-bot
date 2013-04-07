@@ -4,7 +4,7 @@
 #ifndef GITIRC_IS_INTERESTING_REF_H
 #define GITIRC_IS_INTERESTING_REF_H
 #include <string>
-int is_interesting_ref(const std::string& s);
+bool is_interesting_ref(const std::string& s);
 #endif
 @ This whole thing should be marked as an HTCondor hack.
 @c

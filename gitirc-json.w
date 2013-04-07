@@ -89,7 +89,9 @@ bool bdata;
 json_node* parent;
 static json_node def;
 @ @c
+#include "gitirc-logger.h"
 JSON::json_node JSON::json_node::def;
+extern gitirc_logger userlog;
 @ @c
 bool JSON::json_node::is_whitespace(char ch)
 {
@@ -121,7 +123,7 @@ std::shared_ptr<JSON::json_node> JSON::json_node::parse(std::string::const_itera
 		std::string::const_iterator* term)
 {
 #if 0
-	std::cerr << "entering " << __PRETTY_FUNCTION__ << std::endl;
+	userlog << "entering " << __PRETTY_FUNCTION__ << std::endl;
 #endif
 	int state = 0;
 	std::string name;
@@ -131,7 +133,7 @@ std::shared_ptr<JSON::json_node> JSON::json_node::parse(std::string::const_itera
 	if(ret) ret->type = object;
 	while(ret && begin != end) {
 #if 0
-		std::cerr << "begin points to " << *begin << ", state = " << state << std::endl;
+		userlog << "begin points to " << *begin << ", state = " << state << std::endl;
 #endif
 		if(is_whitespace(*begin)) {
 			++begin;
@@ -150,7 +152,8 @@ std::shared_ptr<JSON::json_node> JSON::json_node::parse(std::string::const_itera
 	}
 	return ret;
 }
-@ @<Handle case 0 in |json_node::parse|@>=
+@ We expect to see the beginning of an array or a list here.
+@<Handle case 0 in |json_node::parse|@>=
 if(*begin == '{') {
 	++begin;
 	state = 1;
@@ -159,11 +162,12 @@ if(*begin == '{') {
 	ret->type = array;
 	state = 5;
 }@+else state = -1;
-@ @<Handle case 1 in |json_node::parse|@>=
+@ We should see a quote here, unless the list is empty.
+@<Handle case 1 in |json_node::parse|@>=
 if(*begin == '"') {
 	name = parse_string(begin,end,&end_string);
 #if 0
-	std::cerr << "name = " << name << std::endl;
+	userlog << "name = " << name << std::endl;
 #endif
 	if(end_string == end) state = -1;
 	else {
@@ -184,7 +188,7 @@ if(*begin == ':') {
 child = parse_value(begin,end,&end_string);
 if(!child) {
 #if 0
-	std::cerr << "child was null" << std::endl;
+	userlog << "child was null" << std::endl;
 #endif
 	state = -1;
 }@+else {
@@ -238,7 +242,7 @@ std::shared_ptr<JSON::json_node> JSON::json_node::parse_value(std::string::const
 		std::string::const_iterator* term)
 {
 #if 0
-	std::cerr << "entering " << __PRETTY_FUNCTION__ << std::endl;
+	userlog << "entering " << __PRETTY_FUNCTION__ << std::endl;
 #endif
 	@<Clear out whitespace@>@;
 	if(begin == end) {
@@ -250,6 +254,7 @@ std::shared_ptr<JSON::json_node> JSON::json_node::parse_value(std::string::const
 		@<Key off of first character@>@;
 		default: *term = end; return std::shared_ptr<json_node>();break;
 	}
+	return ret;
 }
 @ @<Key off of first character@>=
 case '{': case '[': return parse(begin,end,term);@+break;
@@ -325,7 +330,7 @@ std::shared_ptr<JSON::json_node> JSON::json_node::parse_lit(std::string::const_i
 		std::string::const_iterator* term)
 {
 #if 0
-	std::cerr << "entering " << __PRETTY_FUNCTION__ << std::endl;
+	userlog << "entering " << __PRETTY_FUNCTION__ << std::endl;
 #endif
 	std::shared_ptr<json_node> ret(new json_node);
 	if(!ret) return ret;
@@ -339,11 +344,12 @@ std::shared_ptr<JSON::json_node> JSON::json_node::parse_lit(std::string::const_i
 		ret = std::shared_ptr<json_node>();
 		break;
 	}
-	return std::shared_ptr<json_node>();
+	return ret;
 }
 @ @<Expect literal \.{"true"} or \.{"false"}@>=
 pp = std::find(begin,end,'e');
 if(pp == end) {
+	userlog << "Did not find expected 'e' character" << std::endl;
 	*term = end;
 	return std::shared_ptr<json_node>();
 }
@@ -351,7 +357,10 @@ if(pp == end) {
 s.assign(begin,pp);
 if(s == "true") ret->bdata = true;
 else if(s == "false") ret->bdata = false;
-else ret = std::shared_ptr<json_node>();
+else {
+	userlog << "s = \"" << s << "\"" << std::endl;
+	ret = std::shared_ptr<json_node>();
+}
 @ @<Expect literal \.{"null"}@>=
 pp = std::find(begin,end,'l');
 if(pp != end) ++pp;

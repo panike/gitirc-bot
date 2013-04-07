@@ -129,12 +129,6 @@ private:
 extern gitirc_logger userlog;
 @<Internal helper structures@>@;
 @<Helper function definitions@>@;
-@ @<Private |git_db| data@>=
-std::set<std::string> build_branches;
-@ @<Public |git_db| interface@>=
-void set_builds(const std::set<std::string>& bb) {
-	build_branches = bb;
-}
 @ A map to hold the references.  The key is the name of the reference, and the
 value is the SHA-1 name of the content.
 @<Public |git_db| interface@>=
@@ -157,8 +151,8 @@ std::string email_script;
 std::string shorten_url;
 std::string change_url;
 std::string build_url;
-@ @c git_db::git_db(const std::map<std::string,std::string>& conf, bool dorl) : corr_mtime(0),
-	should_renew_crefs(true)
+@ @c git_db::git_db(const std::map<std::string,std::string>& conf, bool dorl) :
+	corr_mtime(0)
 {
 	auto ci = conf.find("gitrepo");
 	if(ci == conf.end()) throw exc();
@@ -176,6 +170,8 @@ std::string build_url;
 	if((ci = conf.find("gitrepo")) != conf.end())
 		git_process::gitrepo = ci->second;
 	if((ci = conf.find("log")) != conf.end()) init(ci->second,dorl);
+	should_renew_crefs = true;
+	renew_crefs();
 }
 @ @<Private helper |git_db| functions@>=
 void init(const std::string& logname,bool dorl);
@@ -229,8 +225,11 @@ to use the list of SHA-1's that we recorded earlier.
 @<Initialize the table of ``seen'' commits@>=
 for(auto p = shas.begin(); p != shas.end(); ++p) argv.push_back(p->c_str());
 git_process rl(argv);
-for(s = rl.next(); !s.empty(); s = rl.next())
-	already_seen.insert(s);
+for(;;) {
+	if(rl.finished()) break;
+	s = rl.next();
+	if(!s.empty()) already_seen.insert(s);
+}
 if(rl.check_status()) {
 	userlog << "Failed to list commits" << std::endl;
 	_exit(1);
@@ -251,7 +250,11 @@ std::list<irc_id> git_db::update()
 }
 @ @<Query the remote for the new references@>=
 @<Run \.{git ls-remote} to get the list of references@>@;
-for(std::string s = lsr.next(); !s.empty(); s = lsr.next()) handle_lsr_line(s,new_refs);
+for(;;) {
+	if(lsr.finished()) break;
+	auto s = lsr.next();
+	if(!s.empty()) handle_lsr_line(s,new_refs);
+}
 @ @<Run \.{git ls-remote} to get the list of references@>=
 fetch();
 std::vector<const char*> argv;
@@ -342,9 +345,15 @@ for(auto rhi = rh.begin(); rhi != rh.end(); ++rhi)
 		rhi->count = get_count(rhi->name);
 		if(rhi->count > 0) {
 			auto tmessages = list_commits(rhi->refname,rhi->name,true);
-			messages.insert(lit,tmessages.begin(),tmessages.end());
+			if(!tmessages.empty()) messages.insert(lit,tmessages.begin(),tmessages.end());
+			else {
+				std::stringstream to_gitirc;
+				to_gitirc << get_basename(rhi->refname) << " fast-forwarded to "
+					<< short_sha1(rhi->name);
+				messages.insert(lit,irc_id(to_gitirc.str()));
+			}
 		}@+else if(p != db.end() && rhi->count == 0)
-		@<Decide whether the commit is a reset or a fast-forward@>@;
+			@<Decide whether the commit is a reset or a fast-forward@>@;
 		else if(rhi->count < 0) userlog << "Error writing out commits for "
 			<< rhi->refname << std::endl;
 	}
@@ -380,18 +389,18 @@ if(p != db.end()) {
 	if(!pp.second)
 		userlog << "Could not insert \"" << rhi->refname << "\" into db" << std::endl;
 }
-@ @<Declare |get_basename|@>=
-namespace {
-	std::string get_basename(const std::string& s,int trim = 2)
-	{
-		auto pp = s.begin();
-		for(auto ii=0;ii<trim;++ii) {
-			auto qq = std::find(pp,s.end(),'/');
-			if(qq != s.end()) pp = qq + 1;
-			else break;
-		}
-		return std::string(pp,s.end());
+@ @<Public |git_db| interface@>=
+static std::string get_basename(const std::string& s, int trim = 2);
+@ @c
+std::string git_db::get_basename(const std::string& s,int trim)
+{
+	auto pp = s.begin();
+	for(auto ii=0;ii<trim;++ii) {
+		auto qq = std::find(pp,s.end(),'/');
+		if(qq != s.end()) pp = qq + 1;
+		else break;
 	}
+	return std::string(pp,s.end());
 }
 @ @<Private |git_db| data@>=
 std::vector<std::string> crefs;
@@ -420,7 +429,7 @@ for(auto cii = crefs.begin(); cii != crefs.end(); ++cii)
 	std::vector<std::string> extras;
 	get_commit_set(&dev_refs,mi->second,p->second,extras);
 	std::sort(dev_refs.begin(),dev_refs.end());
-	std::vector<std::string>::iterator si;
+	auto si = stable_refs.begin();
 	@<Compare the lists of commits@>@;
 	if(si != stable_refs.end()) 
 		@<Do a secondary test to check for unmerged stable release@>@;
@@ -449,8 +458,11 @@ void get_commit_set(std::vector<std::string>*,const std::string& top,
 	std::vector<const char*> argv;
 	@<Prepare the \.{rev-list} command line@>@;
 	git_process rl(argv);
-	for(auto s=rl.next(); !s.empty(); s=rl.next())
-		lst->push_back(s);
+	for(;;) {
+		if(rl.finished()) break;
+		auto s=rl.next();
+		if(!s.empty()) lst->push_back(s);
+	}
 }
 @ @<Prepare the \.{rev-list} command line@>=
 argv.push_back("git");
@@ -561,7 +573,10 @@ std::set<std::string> already_seen;
 	@<Run \.{git log} on ref |refname|@>@;
 	@<Find the basename of the ref@>@;
 	auto loop_counter = 0;
-	for(auto s = log.next(); !s.empty(); s = log.next()) {
+	for(;;) {
+		if(log.finished()) break;
+		auto s = log.next();
+		if(s.empty()) continue;
 		auto sn = short_name(s);
 		auto longname = (loop_counter==0)?sha1:rev_parse(sn);
 		++loop_counter;
@@ -573,7 +588,7 @@ std::set<std::string> already_seen;
 		@<Output the log message@>@;
 		auto change = get_change_url(sn);
 		if(!change.empty()) logstring << " " << change;
-		if(build && build_branches.find(basename) != build_branches.end())
+		if(build && is_interesting_ref(basename))
 			@<Append the NMI build string@>@;
 		if(!logstring.str().empty()) m.push_front(logstring.str());
 	}
@@ -627,6 +642,9 @@ git_process log(argv);
 @<Output the log message@>=
 logstring << "Update to " << (is_branch?"branch":(is_tag?"tag":"ref")) << " "
 	<< basename << ": " << s;
+#if 0
+userlog << "Log string is \"" << logstring.str() << "\"" << std::endl;
+#endif
 auto short_url = get_short_gh_url(sn,is_merge);
 if(!short_url.empty()) logstring << " " << short_url;
 @ @<Private helper |git_db| functions@>=
@@ -782,7 +800,10 @@ std::string git_db::contains(const std::string& name, const char* bt)
 	argv.push_back(name.c_str());
 	git_process cf(argv);
 	std::stringstream bc;
-	for(std::string s = cf.next(); !s.empty(); s = cf.next()) {
+	for(;;) {
+		if(cf.finished()) break;
+		auto s = cf.next();
+		if(s.empty()) continue;
 @^Hack for condor repo@>
 		if(s.find("BUILD") != std::string::npos) continue;
 		if(!bc.str().empty()) bc << " ";
@@ -801,13 +822,12 @@ struct ref_holder {
 	ref_holder(const std::string& r, const std::string& s) : refname(r), name(s), count(-2) {}
 };
 @ @<Internal helper structures@>=
-@<Declare |get_basename|@>@;
 @<Define the |SortRefs| structure@>@;
 struct SortCommits {
 	SortCommits(git_db& p) : gdb(p) {}
 	bool operator()(const git_db::ref_holder& lhs,const git_db::ref_holder& rhs) {
-		std::string lbname = get_basename(lhs.refname);
-		std::string rbname = get_basename(rhs.refname);
+		std::string lbname = git_db::get_basename(lhs.refname);
+		std::string rbname = git_db::get_basename(rhs.refname);
 		if(!is_interesting_ref(lbname)) {
 			if(is_interesting_ref(rbname))
 				return true;
@@ -887,26 +907,11 @@ std::string git_db::get_single_ref(const std::string& ref)
 	if(!ret.empty()) @<Seems to be a valid branch. Dump the info@>@;
 	return ret;
 }
-@ @<Seems to be a valid branch. Dump the info@>={
-	std::string sn(ret.begin(),std::find(ret.begin(),ret.end(),' '));
-	auto ln = rev_parse(sn);
-	auto is_merge = remove_parents(&ret);
-	auto gh_url = get_short_gh_url(ln,is_merge);
-	if(!gh_url.empty()) {
-		ret.append(1,' ');
-		ret.append(gh_url);
-	}
-@^Hack for condor@>
-	auto cn = get_change_url(sn);
-	if(!cn.empty()) {
-		ret.append(1,' ');
-		ret.append(cn);
-	}
-}
 @ If |force| is true, we want to produce output, regardless whether this is
 deep in the history.  If |force| is false, we only want to see it if it is new.
 @<Prepare arguments for \.{git log -1}@>=
 argv.push_back("git");
+argv.push_back("--no-pager");
 std::string repos="--git-dir=";
 repos.append(repo);
 argv.push_back(repos.c_str());
@@ -1065,7 +1070,10 @@ std::string git_db::get_parents(const std::string& ref) const
 	argv.push_back(refname.c_str());
 	git_process gp(argv);
 	std::stringstream ss;
-	for(std::string s=gp.next(); !s.empty(); s=gp.next()) {
+	for(;;) {
+		if(gp.finished()) break;
+		auto s = gp.next();
+		if(s.empty()) continue;
 		if(!ss.str().empty()) ss << " ";
 		ss << short_sha1(s);
 	}
@@ -1085,8 +1093,12 @@ std::string git_db::get_children(const std::string& ref) const
 	argv.push_back(ref.c_str());
 	git_process gp(argv);
 	std::string sha1;
-	for(auto s=gp.next(); !s.empty(); s=gp.next())
+	for(;;) {
+		if(gp.finished()) break;
+		auto s=gp.next();
+		if(s.empty()) continue;
 		sha1=s;
+	}
 	argv.clear();
 	argv.push_back("git");
 	argv.push_back(gd.c_str());
@@ -1097,7 +1109,10 @@ std::string git_db::get_children(const std::string& ref) const
 	argv.push_back(sha1.c_str());
 	git_process rl(argv);
 	std::string ret;
-	for(auto s=rl.next(); !s.empty(); s=rl.next()) {
+	for(;;) {
+		if(rl.finished()) break;
+		auto s=rl.next();
+		if(s.empty()) continue;
 		auto off = s.find(sha1);
 		if(off != std::string::npos && off > 0) {
 			ret.append(" ");

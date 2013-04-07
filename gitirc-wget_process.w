@@ -61,7 +61,10 @@ wget_process::wget_process(std::vector<const char*>& argv) :
 bool wget_process::process_feed()
 {
 	bool ret = true;
-	for(auto s=next(); !s.empty(); s= next()) {
+	for(;;) {
+		if(finished()) break;
+		auto s=next();
+		if(s.empty()) continue;
 		for(auto p = s.begin(); p != s.end(); ++p)
 			if(!insert(*p)) { ret = false; break; }
 		if(!insert('\n')) { ret =  false; break; }
