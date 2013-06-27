@@ -175,10 +175,9 @@ StringSplitter::StringSplitter(const std::string& s, unsigned int length) :
 std::string StringSplitter::get()
 {
 	std::string ret;
-	if(source.size() <= len) {
-		ret = std::move(source);
-		source.clear();
-	}@+else @<The string needs to be split into smaller pieces@>@;
+	if(source.size() <= len)
+		std::swap(ret,source);
+	else @<The string needs to be split into smaller pieces@>@;
 	return ret;
 }
 @ @<The string needs to be split into smaller pieces@>={
@@ -619,10 +618,16 @@ void process_privmsg(irc_session_t*session,const char*event,const char*origin,
 		@<List the parents of a commit@>@;
 	else if(ref.find("children:") == 0)
 		@<List the children of a commit@>@;
+	else if(ref.find("shutup")==0)
+		@<Flush the message queue@>@;
 	else @<Hopefully it is a commit.  Print the log subject line@>@;
 	if(!result.empty())
 		push_into_ctx<is_channel_msg>(static_cast<irc_ctx*>(irc_get_ctx(session)),
 			result,origin);
+}
+@ @<Flush the message queue@>={
+	irc_ctx* p = static_cast<irc_ctx*>(irc_get_ctx(session));
+	if(p) p->messages.clear();
 }
 @ @<Check to see if we have a command@>=
 it = std::find(it,privmsg.end(),'!');
