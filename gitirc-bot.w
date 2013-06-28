@@ -108,6 +108,7 @@ int main(int argc,char* argv[],char* envp[])
 	@<Close all file descriptors and the terminal@>@;
 	@<Get |userlogname| from command line@>@;
 	@<Print start message@>@;
+	whitelist http_whitelist;
 	@<Deal with the configuration@>@;
 	std::list<irc_id> messages;
 	std::string schannel("channel");
@@ -299,6 +300,7 @@ const int normal_log_line_length = 72;
 if(!configuration["directory"].empty())
 	chdir(configuration["directory"].c_str());
 get_outputs(configuration);
+@<Configure the whitelist@>@;
 @ @<Function declarations for |main|@>=
 void get_outputs(std::map<std::string,std::string>& c)
 {
@@ -937,6 +939,7 @@ for(;;) {
 #include "gitircConfig.h"
 #include "gitirc-logger.h"
 #include "gitirc-Process.h"
+#include "gitirc-whitelist.h"
 @*The JSON interface. Github sends out notifications over HTTP protocol in
 JSON. We want to handle that.
 @<Initialize the program@>=
@@ -1007,9 +1010,16 @@ if(has_httpd && ((httpfd >= 0 && FD_ISSET(httpfd,&rfds)) ||
 		struct sockaddr_in remote;
 		socklen_t remote_len = sizeof(remote);
 		httpfd = ::accept(http_socket,(struct sockaddr*)&remote,&remote_len);
-		userlog << "Accepting connection from " << inet_ntoa(remote.sin_addr) << std::endl;
-		http_message.clear();
-		http_msg_complete = false;
+		if(!http_whitelist.accept(remote.sin_addr)) {
+			userlog << "Rejecting connection from " << inet_ntoa(remote.sin_addr) << std::endl;
+			::close(httpfd);
+			httpfd = gitirc_constants::invalid_fd;
+			http_msg_complete = false;
+		} else {
+			userlog << "Accepting connection from " << inet_ntoa(remote.sin_addr) << std::endl;
+			http_message.clear();
+			http_msg_complete = false;
+		}
 	}
 	if(httpfd>=0 && FD_ISSET(httpfd,&rfds)){
 		int numread;
@@ -1025,6 +1035,16 @@ if(has_httpd && ((httpfd >= 0 && FD_ISSET(httpfd,&rfds)) ||
 			@<If we have it all, return a reply, close the connection@>@;
 		}
 	}
+}
+@ @<Configure the whitelist@>=
+if(configuration.find("whitelist") != configuration.end()) {
+	auto s=configuration["whitelist"];
+	auto p = std::find_if(s.begin(),s.end(),std::not1(spaceFinder()));
+	while(p != s.end()) {
+		auto q = std::find_if(p,s.end(),spaceFinder());
+		http_whitelist.insert(std::string(p,q));
+		p = std::find_if(q,s.end(),std::not1(spaceFinder()));
+	}	
 }
 @ @<Find the content length header@>=
 http_message.erase(std::remove(http_message.begin(),http_message.end(),'\r'),http_message.end());
